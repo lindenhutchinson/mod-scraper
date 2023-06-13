@@ -1,0 +1,9 @@
+mods/**
+downloads/**
+venv/
+__pycache__/
+selenium/
+*.pkl
+*.exe
+*.crx
+.env
