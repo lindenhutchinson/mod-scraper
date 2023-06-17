@@ -1,20 +1,18 @@
-from selenium import webdriver
 import time
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import pickle
-from selenium.common.exceptions import NoSuchElementException, TimeoutException
 import os
 import re
-from selenium_stealth import stealth
 from pathlib import Path
 from dotenv import load_dotenv
+from selenium_utils import get_driver, click_when_clickable, wait_for_element, find_element
 load_dotenv()
 
 COOKIES_FILE = "cookies.pkl"
 USER = os.getenv('USER')
-PASSWORD = os.getenv('PASSWORD')
+PASSWORD = os.getenv('PASS')
 GUIDE_URL = os.getenv('GUIDE_URL')
 
 def is_download_finished(temp_folder):
@@ -47,41 +45,16 @@ def login(driver, username, password):
     )
     login_button.click()
 
-def wait_for_clickable(driver, selector, sel_type, timeout=10):
-    try:
-        return WebDriverWait(driver, timeout).until(
-            EC.element_to_be_clickable((sel_type, selector))
-        )
-    except TimeoutException:
-        return False
-
-def wait_for_element_clickable(driver, element, timeout=10):
-    return WebDriverWait(driver, timeout).until(
-        EC.element_to_be_clickable(element)
-    )
-
-def wait_for_element(driver, selector, sel_type, timeout=10):
-    return WebDriverWait(driver, timeout).until(
-        EC.presence_of_element_located((sel_type, selector))
-    )
-
-def find_element(driver, selector, sel_type):
-    try:
-        return driver.find_element(sel_type, selector)
-    except NoSuchElementException:
-        return False
-
 def reload_session(driver, username, password):
     driver.get(GUIDE_URL)
 
-    login_btn =  wait_for_clickable(driver, 'login', By.ID, 3)
+    login_btn = click_when_clickable(driver, 'login', By.ID, 1)
     if login_btn:
         print('Re-authenticating')
         if os.path.exists(COOKIES_FILE):
             cookies = pickle.load(open(COOKIES_FILE, "rb"))
             for cookie in cookies:
                 driver.add_cookie(cookie)
-        login_btn.click()
         
         if find_element(driver, 'new_user', By.ID):
             # we have landed on the login page - cookies are probably expired
@@ -93,59 +66,25 @@ def reload_session(driver, username, password):
             # but we still need to confirm the authentication
             continue_btn = wait_for_element(driver, 'a.btn.btn-primary', By.CSS_SELECTOR)
             continue_btn.click()
+            
+        # let everything settle a bit
+        time.sleep(1)
     else:
         print('Profile was saved, no authentication required')
 
-    # wait for all the login actions to settle
-    time.sleep(1)
-
-def get_driver():
-    options = webdriver.ChromeOptions()
-
-    options.add_argument("--start-maximized")
-    prefs = {
-        "profile.default_content_settings.popups": 0,
-        "download.default_directory": r'./downloads//',#IMPORTANT - ENDING SLASH V IMPORTANT
-        "directory_upgrade": True
-    }  
-    options.add_extension('./adblocker.crx')
-
-    options.add_experimental_option("prefs", prefs)
-    options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
-    options.add_experimental_option('useAutomationExtension', False)
-    options.add_argument("--headless")  # Run Chrome in headless mode
-    options.add_argument("--disable-gpu")  # Disable GPU acceleration
-    options.add_argument("--user-data-dir=C:\environments\selenium")
-    options.add_argument("--no-sandbox")  # Disable the sandbox
-    options.add_argument("--disable-dev-shm-usage")  # Disable /dev/shm usage
-    options.add_argument("--disable-infobars")  # Disable the "Chrome is being controlled by automated test software" notification
-    options.add_argument("--disable-notifications")  # Disable notifications
-    options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")  # Set a custom user agent
-
-    driver = webdriver.Chrome(options=options)
-    stealth(driver,
-        languages=["en-US", "en"],
-        vendor="Google Inc.",
-        platform="Win32",
-        webgl_vendor="Intel Inc.",
-        renderer="Intel Iris OpenGL Engine",
-        fix_hairline=True,
-    )
-    return driver
-
 def get_mod_links(driver):
     container_names = [
-        'Core Mods',
+        'General',
+        'Combat Mods',
         'Character',
         'Overhauls',
         'Graphics',
-        'Combat Mods',
         'Magic Mods',
         'Leveling and Skills',
         'Race and Birthsign Mods',
-        'General',
     ]
-
+    safe_links = {}
+    unused_links = {}
     for name in container_names:
         xpath = f"//*[text()='{name}']/../../../following-sibling::div[contains(@class, 'bbc_spoiler')]"
         mod_container = driver.find_element(By.XPATH, xpath)
@@ -153,8 +92,7 @@ def get_mod_links(driver):
         # todo - fix this lol
         mod_links = mod_container.find_elements(By.CSS_SELECTOR, 'br + br + a')
         pattern = r'(https:\/\/www\.nexusmods\.com\/oblivion\/mods\/\d+)'
-        safe_links = {}
-        unused_links = {}
+        
         for link in mod_links:
             href = link.get_attribute('href')
             text = link.get_attribute('text')
@@ -172,13 +110,13 @@ def download_mods(links):
     for name, href in links.items():
         driver.get(href)
 
-        download_btn = wait_for_clickable(driver, "//span[text()='Manual']", By.XPATH)
-        download_btn.click()
+        # click on the download button
+        click_when_clickable(driver, "//span[text()='Manual']", By.XPATH)
 
         # check if the extra download dialog as appeared
         if find_element(driver, '.mfp-content', By.CSS_SELECTOR):
-            continue_btn = wait_for_clickable(driver, "//a[text()='Download']", By.XPATH)
-            continue_btn.click()
+            # click the button to continue
+            click_when_clickable(driver, "//a[text()='Download']", By.XPATH)
 
         # can only download single files, no way to choose between multiples
         if not 'file_id=' in driver.current_url:
@@ -187,24 +125,29 @@ def download_mods(links):
             continue
         
         print(f"Downloading mod - {name}")
-        slow_dl_btn = wait_for_clickable(driver, 'slowDownloadButton', By.ID)
-        slow_dl_btn.click()
+        # click on the 'Slow Download' button (no premium sad)
+        click_when_clickable(driver, 'slowDownloadButton', By.ID)
         # minimum wait time for downloads to start is 5 seconds
         # provide an extra second to be safe
         time.sleep(6)
+        
+    ctr = 0 
+    while(not is_download_finished('./downloads')):
+        ctr +=1
+        print(f'waiting downloads to finish ({ctr})')
+        time.sleep(10)
 
 if __name__ == "__main__":
-    driver = get_driver()
-
+    driver = get_driver(headless=True)
+    print('Authenticating')
     reload_session(driver, USER, PASSWORD)
 
     assert driver.current_url == GUIDE_URL
-
+    print('On the guide page, getting links')
     safe_links, unused_links = get_mod_links(driver)
-    download_mods(safe_links)
 
-    while(not is_download_finished('./downloads')):
-        print('waiting for stuff to finish downloading')
-        time.sleep(10)
+    download_mods(safe_links)
+        
+
 
         
